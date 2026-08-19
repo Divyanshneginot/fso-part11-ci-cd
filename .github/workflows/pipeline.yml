@@ -9,7 +9,7 @@ on:
     types: [opened, synchronize]
 
 jobs:
-  simple_deployment_pipeline:
+  lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -20,6 +20,16 @@ jobs:
         run: npm install
       - name: Check style
         run: npm run eslint
+
+  build_and_test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+      - name: Install dependencies
+        run: npm install
       - name: Build
         run: npm run build
       - name: Test
@@ -28,17 +38,45 @@ jobs:
         run: npx playwright install --with-deps
       - name: Run E2E tests
         run: npm run test:e2e
+
+  deploy:
+    needs: [lint, build_and_test]
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'push' }}
+    steps:
       - name: Trigger deployment
-        if: ${{ github.event_name == 'push' }}
         run: curl ${{ secrets.RENDER_DEPLOY_HOOK }}
+
   tag_release:
-    needs: [simple_deployment_pipeline]
+    needs: [deploy]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
       - name: Bump version and push tag
-        if: ${{ github.event_name == 'push' }}
         uses: anothrNick/github-tag-action@1.75.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          DEFAULT_BUMP: patch  
+          DEFAULT_BUMP: patch
+
+  discord_success_notification:
+    needs: [deploy]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Discord Notification on Success
+        uses: Ilshidur/action-discord@0c4b27844ba47cb1c7bee539c8eead5284ce9fa9
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        with:
+          args: 'A new version of Pokedex deployed successfully!'
+
+  discord_failure_notification:
+    needs: [lint, build_and_test, deploy, tag_release]
+    if: ${{ always() && contains(needs.*.result, 'failure') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Discord Notification on Failure
+        uses: Ilshidur/action-discord@0c4b27844ba47cb1c7bee539c8eead5284ce9fa9
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+        with:
+          args: 'Build failed! Commit: ${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }} by ${{ github.actor }}'
